@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg') # Add this line to set a non-interactive backend
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -73,7 +75,7 @@ def plot_loss(train_losses, val_losses):
     plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
-    plt.show()
+    plt.savefig("plot_loss.png") # Changed plt.save to plt.savefig
 
 def visualize_filters(model):
     first_layer = model.encoder[0]
@@ -87,7 +89,7 @@ def visualize_filters(model):
         axs[i].imshow(filters[i, 0], cmap='gray')
         axs[i].axis('off')
     plt.suptitle("Learned Filters from First Conv Layer")
-    plt.show()
+    plt.savefig("filters.png") # Changed plt.save to plt.savefig
 
 def show_image_comparison(noisy, clean, output, title_prefix=""):
     fig, axs = plt.subplots(1, 3, figsize=(10, 4))
@@ -99,7 +101,7 @@ def show_image_comparison(noisy, clean, output, title_prefix=""):
     axs[2].set_title(f"{title_prefix} Output")
     for ax in axs:
         ax.axis('off')
-    plt.show()
+    plt.savefig("comparison.png")
 
 # MAIN
 if __name__ == "__main__":
@@ -128,5 +130,29 @@ if __name__ == "__main__":
     
     # Save the model
     torch.save(model.cpu().state_dict(), "cnn_denoiser_weights.pth")
+
+    # Generate and save plots
+    plot_loss(train_losses, val_losses)
+    visualize_filters(model.cpu())
+
+    # Visualize a comparison for a sample from the validation set
+    if val_loader:
+        # Get a batch of validation data
+        sample_noisy_batch, sample_clean_batch = next(iter(val_loader))
+        
+        # Move to device and get model output
+        sample_noisy_batch = sample_noisy_batch.to(device)
+        model.to(device) # Move model back to the device
+        model.eval() # Ensure model is in evaluation mode
+        with torch.no_grad():
+            sample_output_batch = model(sample_noisy_batch)
+
+        # Select the first image from the batch for visualization
+        # Move tensors to CPU, remove channel dimension (squeeze), and convert to NumPy arrays
+        noisy_img = sample_noisy_batch[0].cpu().squeeze().numpy()
+        clean_img = sample_clean_batch[0].cpu().squeeze().numpy() # Assuming clean images are also batched and need similar processing
+        output_img = sample_output_batch[0].cpu().squeeze().numpy()
+        
+        show_image_comparison(noisy_img, clean_img, output_img, title_prefix="Val_Example_")
 
 
