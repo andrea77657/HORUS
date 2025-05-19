@@ -14,4 +14,4 @@ module load eth_proxy
 
 cd "$SLURM_SUBMIT_DIR"
 
-python3 CNN.py
+python3 more_images_euler.py
