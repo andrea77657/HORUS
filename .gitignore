@@ -1,2 +1,3 @@
 *.npy
 *.out
+*.DS_Store
