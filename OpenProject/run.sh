@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH -n 10
+#SBATCH -n 1
 #SBATCH --mem-per-cpu=32g
-#SBATCH --time=01:10:00
+#SBATCH --time=01:30:00
 #SBATCH --gpus=1
 #SBATCH --gres=gpumem:32g
 
@@ -14,4 +14,4 @@ module load eth_proxy
 
 cd "$SLURM_SUBMIT_DIR"
 
-python3 more_images_euler.py
+python3 harderimagesKfold.py
