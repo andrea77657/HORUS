@@ -33,7 +33,10 @@ class CNN_Denoiser(nn.Module):
         return x
 
 def normalize_images(images):
-    return (images - images.min()) / (images.max() - images.min())
+    return images / 255.0
+
+def denormalize_image(img):
+    return np.clip(img * 255.0, 0, 255).astype(np.uint8)
 
 def train_model(model, train_loader, val_loader, epochs, lr):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -94,6 +97,10 @@ def visualize_filters(model):
     plt.show()
 
 def show_image_comparison(noisy, clean, output, title_prefix=""):
+    noisy = denormalize_image(noisy)
+    clean = denormalize_image(clean)
+    output = denormalize_image(output)
+    
     fig, axs = plt.subplots(1, 3, figsize=(10, 4))
     axs[0].imshow(noisy, cmap='gray')
     axs[0].set_title(f"{title_prefix} Noisy")
