@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import random
+from itertools import product
 
 EULER = True
 
@@ -188,7 +189,7 @@ def compute_test_rmse(model, test_loader):
     return rmse
 
 
-def show_multiple_test_samples(model, test_dataset, num_samples=5, filename="test_examples_crossvali.png"):
+def show_multiple_test_samples(model, test_dataset, num_samples=5, filename="test_examples_crossvali_search.png"):
     model.eval()
     indices = random.sample(range(len(test_dataset)), num_samples)
 
@@ -247,48 +248,72 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_dataset, batch_size=64)
 
     if EULER:
+        from itertools import product
         k_folds = 5
         kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
-        fold_results = []
-
         trainval_indices = list(range(len(trainval_dataset)))
 
-        for fold, (train_idx, val_idx) in enumerate(kfold.split(trainval_indices)):
-            print(f"\n--- Fold {fold + 1}/{k_folds} ---")
+        # Hyperparameter grid
+        learning_rates = [1e-2, 1e-3, 5e-4, 1e-4]
+        batch_sizes = [32, 64]
+        patiences = [5]
 
-            train_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in train_idx])
-            val_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in val_idx])
+        best_rmse = float('inf')
+        best_params = None
+        results = []
 
-            train_loader = DataLoader(train_subset, batch_size=64, shuffle=True)
-            val_loader = DataLoader(val_subset, batch_size=64, shuffle=False)
+        for lr, bs, patience in product(learning_rates, batch_sizes, patiences):
+            print(f"\nTrying config: LR={lr}, Batch={bs}, Patience={patience}")
+            fold_rmses = []
 
-            model = DenoisingUNetLike().to(device)
-            train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=1e-3)
+            for fold, (train_idx, val_idx) in enumerate(kfold.split(trainval_indices)):
+                print(f"\n--- Fold {fold + 1}/{k_folds} ---")
+                train_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in train_idx])
+                val_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in val_idx])
+                train_loader = DataLoader(train_subset, batch_size=bs, shuffle=True)
+                val_loader = DataLoader(val_subset, batch_size=bs, shuffle=False)
 
-            if fold == k_folds - 1:
-                torch.save(model.cpu().state_dict(), "residual_weights_19k_crossvali.pth")
+                model = DenoisingUNetLike().to(device)
+                train_model(model, train_loader, val_loader, epochs=50, lr=lr, patience=patience)
 
-            plot_loss(train_losses, val_losses, filename=f"loss_fold_{fold + 1}.png")
+                rmse = compute_test_rmse(model, test_loader)
+                fold_rmses.append(rmse)
+                print(f"Fold {fold + 1} Test RMSE: {rmse:.4f}")
 
-            model.to(device)
-            rmse = compute_test_rmse(model, test_loader)
-            print(f"Fold {fold + 1} Test RMSE: {rmse:.4f}")
-            fold_results.append(rmse)
+            avg_rmse = np.mean(fold_rmses)
+            results.append(((lr, bs, patience), avg_rmse))
+            print(f"Config RMSE average: {avg_rmse:.4f}")
 
-        print("\nCross-validation results:")
-        print("Fold RMSEs:", fold_results)
-        print(f"Average Test RMSE: {np.mean(fold_results):.4f}")
-        print(f"Std Dev: {np.std(fold_results):.4f}")
+            if avg_rmse < best_rmse:
+                best_rmse = avg_rmse
+                best_params = (lr, bs, patience)
 
-        # Optionally: show examples from the last fold
-        show_multiple_test_samples(model, test_dataset, num_samples=5)
+        # Summary
+        print("\nHyperparameter tuning results:")
+        for config, rmse in results:
+            print(f"LR={config[0]}, BS={config[1]}, Pat={config[2]} => RMSE: {rmse:.4f}")
+        print(f"\nBest config: LR={best_params[0]}, BS={best_params[1]}, Patience={best_params[2]} with RMSE={best_rmse:.4f}")
+
+        # Final training on full train+val with best config
+        print("\n🎯 Retraining final model on full train+val with best hyperparameters...")
+        best_lr, best_bs, best_patience = best_params
+        trainval_loader = DataLoader(trainval_dataset, batch_size=best_bs, shuffle=True)
+
+        final_model = DenoisingUNetLike().to(device)
+        train_model(final_model, trainval_loader, val_loader=None, epochs=50, lr=best_lr, patience=best_patience)
+
+        torch.save(final_model.cpu().state_dict(), "crossvali_search_final.pth")
+        final_model.to(device)
+
+        final_rmse = compute_test_rmse(final_model, test_loader)
+        print(f"\nFinal Test RMSE: {final_rmse:.4f}")
+        show_multiple_test_samples(final_model, test_dataset, num_samples=5)
 
     else:
         # Load and evaluate previously saved model
         model = DenoisingUNetLike().to(device)
-        model.load_state_dict(torch.load("residual_weights_19k_crossvali.pth", map_location=device))
+        model.load_state_dict(torch.load("crossvali_search_final.pth", map_location=device))
         model.eval()
         rmse = compute_test_rmse(model, test_loader)
         print(f"Test RMSE: {rmse:.4f}")
         show_multiple_test_samples(model, test_dataset, num_samples=5)
-

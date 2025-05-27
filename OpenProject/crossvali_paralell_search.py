@@ -6,10 +6,16 @@ import torch.nn.functional as F
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import random
+import sys
+import os
 
-EULER = True
+# Parse arguments
+lr = float(sys.argv[1])
+batch_size = int(sys.argv[2])
+patience = int(sys.argv[3])
+fold = int(sys.argv[4]) if len(sys.argv) > 4 else -1
 
-device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 class ResidualBlock(nn.Module):
@@ -227,7 +233,6 @@ def show_multiple_test_samples(model, test_dataset, num_samples=5, filename="tes
 
 # MAIN
 if __name__ == "__main__":
-    # Load and normalize data
     noisy = np.load("noisy_train_19k.npy").astype(np.float32)
     clean = np.load("clean_train_19k.npy").astype(np.float32)
     noisy_norm = normalize_images(noisy)
@@ -237,58 +242,45 @@ if __name__ == "__main__":
     y_tensor = torch.tensor(clean_norm[:, np.newaxis, :, :])
     full_dataset = TensorDataset(x_tensor, y_tensor)
 
-    # Split off a fixed test set (10%) for final evaluation
     total_size = len(full_dataset)
     test_size = int(0.10 * total_size)
     trainval_size = total_size - test_size
-
     generator = torch.Generator().manual_seed(42)
     trainval_dataset, test_dataset = random_split(full_dataset, [trainval_size, test_size], generator=generator)
     test_loader = DataLoader(test_dataset, batch_size=64)
 
-    if EULER:
-        k_folds = 5
-        kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
-        fold_results = []
+    k_folds = 5
+    kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    trainval_indices = list(range(len(trainval_dataset)))
 
-        trainval_indices = list(range(len(trainval_dataset)))
+    fold_rmses = []
+    for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(trainval_indices)):
+        if fold != -1 and fold_idx != fold:
+            continue  # Skip all folds except the selected one
 
-        for fold, (train_idx, val_idx) in enumerate(kfold.split(trainval_indices)):
-            print(f"\n--- Fold {fold + 1}/{k_folds} ---")
+        print(f"\n--- Fold {fold_idx + 1}/{k_folds} ---")
 
-            train_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in train_idx])
-            val_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in val_idx])
+        train_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in train_idx])
+        val_subset = torch.utils.data.Subset(trainval_dataset, [trainval_indices[i] for i in val_idx])
 
-            train_loader = DataLoader(train_subset, batch_size=64, shuffle=True)
-            val_loader = DataLoader(val_subset, batch_size=64, shuffle=False)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
 
-            model = DenoisingUNetLike().to(device)
-            train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=1e-3)
-
-            if fold == k_folds - 1:
-                torch.save(model.cpu().state_dict(), "residual_weights_19k_crossvali.pth")
-
-            plot_loss(train_losses, val_losses, filename=f"loss_fold_{fold + 1}.png")
-
-            model.to(device)
-            rmse = compute_test_rmse(model, test_loader)
-            print(f"Fold {fold + 1} Test RMSE: {rmse:.4f}")
-            fold_results.append(rmse)
-
-        print("\nCross-validation results:")
-        print("Fold RMSEs:", fold_results)
-        print(f"Average Test RMSE: {np.mean(fold_results):.4f}")
-        print(f"Std Dev: {np.std(fold_results):.4f}")
-
-        # Optionally: show examples from the last fold
-        show_multiple_test_samples(model, test_dataset, num_samples=5)
-
-    else:
-        # Load and evaluate previously saved model
         model = DenoisingUNetLike().to(device)
-        model.load_state_dict(torch.load("residual_weights_19k_crossvali.pth", map_location=device))
-        model.eval()
-        rmse = compute_test_rmse(model, test_loader)
-        print(f"Test RMSE: {rmse:.4f}")
-        show_multiple_test_samples(model, test_dataset, num_samples=5)
+        train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=lr, patience=patience)
 
+        # Save outputs
+        os.makedirs("results", exist_ok=True)
+        model_path = f"results/model_lr{lr}_bs{batch_size}_pat{patience}_fold{fold_idx}.pth"
+        torch.save(model.cpu().state_dict(), model_path)
+
+        plot_loss(train_losses, val_losses, filename=f"results/loss_lr{lr}_bs{batch_size}_pat{patience}_fold{fold_idx}.png")
+        model.to(device)
+        rmse = compute_test_rmse(model, test_loader)
+        fold_rmses.append(rmse)
+
+    avg_rmse = np.mean(fold_rmses)
+    with open(f"results/rmse_lr{lr}_bs{batch_size}_pat{patience}.txt", "w") as f:
+        f.write(f"RMSEs: {fold_rmses}\nAverage RMSE: {avg_rmse:.4f}\n")
+
+    print(f"\nDone. Avg RMSE: {avg_rmse:.4f}")
