@@ -106,12 +106,11 @@ def normalize_images(images):
 def denormalize_image(img):
     return np.clip(img * 255.0, 0, 255).astype(np.uint8)
 
-def train_model(model, train_loader, val_loader, epochs, lr, patience=5):
+def train_model(model, train_loader, val_loader=None, epochs=50, lr=1e-3, patience=5):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
     train_losses, val_losses = [], []
-
     best_val_loss = float('inf')
     epochs_no_improve = 0
     best_model_state = None
@@ -129,37 +128,42 @@ def train_model(model, train_loader, val_loader, epochs, lr, patience=5):
             train_loss += loss.item()
         train_losses.append(train_loss / len(train_loader))
 
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(device), y.to(device)
-                output = model(x)
-                loss = criterion(output, y)
-                val_loss += loss.item()
-        val_losses.append(val_loss / len(val_loader))
+        if val_loader is not None:
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(device), y.to(device)
+                    output = model(x)
+                    loss = criterion(output, y)
+                    val_loss += loss.item()
+            val_losses.append(val_loss / len(val_loader))
 
-        if (epoch + 1) % 5 == 0:
-            print(f"[Epoch {epoch+1}] Train Loss: {train_losses[-1]:.4f}, Val Loss: {val_losses[-1]:.4f}")
+            if (epoch + 1) % 5 == 0:
+                print(f"[Epoch {epoch+1}] Train Loss: {train_losses[-1]:.4f}, Val Loss: {val_losses[-1]:.4f}", flush=True)
 
-        # Early stopping check
-        if val_losses[-1] < best_val_loss:
-            best_val_loss = val_losses[-1]
-            best_model_state = model.state_dict()
-            epochs_no_improve = 0
+            # Early stopping check
+            if val_losses[-1] < best_val_loss:
+                best_val_loss = val_losses[-1]
+                best_model_state = model.state_dict()
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                print(f"[!] No improvement for {epochs_no_improve} epoch(s).", flush=True)
+
+            if epochs_no_improve >= patience:
+                print(f"Early stopping at epoch {epoch+1} due to overfitting.", flush=True)
+                break
         else:
-            epochs_no_improve += 1
-            print(f"[!] No improvement for {epochs_no_improve} epoch(s).")
+            # No validation set: just print training loss
+            if (epoch + 1) % 5 == 0:
+                print(f"[Epoch {epoch+1}] Train Loss: {train_losses[-1]:.4f}", flush=True)
 
-        if epochs_no_improve >= patience:
-            print(f"Early stopping at epoch {epoch+1} due to overfitting.")
-            break
-
-    # Restore best model state
-    if best_model_state is not None:
+    if val_loader is not None and best_model_state is not None:
         model.load_state_dict(best_model_state)
 
     return train_losses, val_losses
+
 
 
 def plot_loss(train_losses, val_losses, filename="loss_curve.png"):
@@ -295,7 +299,7 @@ if __name__ == "__main__":
         print(f"\nBest config: LR={best_params[0]}, BS={best_params[1]}, Patience={best_params[2]} with RMSE={best_rmse:.4f}")
 
         # Final training on full train+val with best config
-        print("\n🎯 Retraining final model on full train+val with best hyperparameters...")
+        print("\nRetraining final model on full train+val with best hyperparameters...")
         best_lr, best_bs, best_patience = best_params
         trainval_loader = DataLoader(trainval_dataset, batch_size=best_bs, shuffle=True)
 

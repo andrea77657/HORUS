@@ -7,7 +7,9 @@ from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import random
 
-EULER = True
+# FLAGS
+EULER = False
+RETRAIN_FINAL_MODEL = True  
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -282,6 +284,29 @@ if __name__ == "__main__":
 
         # Optionally: show examples from the last fold
         show_multiple_test_samples(model, test_dataset, num_samples=5)
+
+    elif RETRAIN_FINAL_MODEL:
+        print("\nRetraining final model on full train+val with best hyperparameters...")
+
+        # Best params from previous tuning (update if needed)
+        best_lr = 0.001
+        best_bs = 16
+        best_patience = 5
+
+        trainval_loader = DataLoader(trainval_dataset, batch_size=best_bs, shuffle=True)
+
+        final_model = DenoisingUNetLike().to(device)
+        train_model(final_model, trainval_loader, val_loader=trainval_loader, epochs=25, lr=best_lr, patience=best_patience)
+
+        torch.save(final_model.cpu().state_dict(), "final_model_full_trainval_e25.pth")
+        final_model.to(device)
+
+        # Evaluate on test set
+        final_rmse = compute_test_rmse(final_model, test_loader)
+        print(f"\nFinal Test RMSE (on held-out test set): {final_rmse:.4f}")
+
+        show_multiple_test_samples(final_model, test_dataset, num_samples=5, filename="test_examples_final_model_e25.png")
+
 
     else:
         # Load and evaluate previously saved model
