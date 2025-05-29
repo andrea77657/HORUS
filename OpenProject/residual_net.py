@@ -229,8 +229,8 @@ def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None
 
 # MAIN
 if __name__ == "__main__":
-    noisy = np.load("noisy_train_19k.npy").astype(np.float32)
-    clean = np.load("clean_train_19k.npy").astype(np.float32)
+    noisy = np.load("noisy_train_19k_harder.npy").astype(np.float32)
+    clean = np.load("clean_train_19k_harder.npy").astype(np.float32)
 
     noisy_norm = normalize_images(noisy)
     clean_norm = normalize_images(clean)
