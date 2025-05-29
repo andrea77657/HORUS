@@ -6,7 +6,14 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import random
 
+# FLAGS
 EULER = True
+RETRAIN_FINAL_MODEL = False  
+AUGMENT_DATA = True
+
+# Options
+output_name = "resnet"
+batch_size = 16  # default batch size
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -107,6 +114,17 @@ def normalize_images(images):
 def denormalize_image(img):
     return np.clip(img * 255.0, 0, 255).astype(np.uint8)
 
+def rotate_images(x, y, k):
+    return torch.rot90(x, k, dims=[2, 3]), torch.rot90(y, k, dims=[2, 3])
+
+def extract_tensors(subset):
+            x_list, y_list = [], []
+            for i in range(len(subset)):
+                x, y = subset[i]
+                x_list.append(x.unsqueeze(0))
+                y_list.append(y.unsqueeze(0))
+            return torch.cat(x_list, dim=0), torch.cat(y_list, dim=0)
+
 def train_model(model, train_loader, val_loader, epochs, lr):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
@@ -141,7 +159,9 @@ def train_model(model, train_loader, val_loader, epochs, lr):
 
     return train_losses, val_losses
 
-def plot_loss(train_losses, val_losses, filename="loss_curve.png"):
+def plot_loss(train_losses, val_losses, filename=None):
+    if filename is None:
+        filename = f"loss_curve_{output_name}.png"
     plt.figure(figsize=(8, 5))
     plt.plot(train_losses, label='Train Loss')
     plt.plot(val_losses, label='Val Loss')
@@ -168,7 +188,9 @@ def compute_test_rmse(model, test_loader):
     return rmse
 
 
-def show_multiple_test_samples(model, test_dataset, num_samples=5, filename="test_examples.png"):
+def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None):
+    if filename is None:
+        filename = f"test_examples{output_name}.png"
     model.eval()
     indices = random.sample(range(len(test_dataset)), num_samples)
 
@@ -207,7 +229,6 @@ def show_multiple_test_samples(model, test_dataset, num_samples=5, filename="tes
 
 # MAIN
 if __name__ == "__main__":
-    # Load 19k images instead of 1k
     noisy = np.load("noisy_train_19k.npy").astype(np.float32)
     clean = np.load("clean_train_19k.npy").astype(np.float32)
 
@@ -222,36 +243,73 @@ if __name__ == "__main__":
     test_size = int(0.10 * total_size)
     trainval_size = total_size - test_size
 
-    # Ensure reproducibility
     generator = torch.Generator().manual_seed(42)
     trainval_dataset, test_dataset = random_split(dataset, [trainval_size, test_size], generator=generator)
 
-    # Further split trainval into train and val
-    val_size = int(0.05 * trainval_size)
-    train_size = trainval_size - val_size
+    if AUGMENT_DATA:
+        x_tv, y_tv = extract_tensors(trainval_dataset)
+
+        x_aug = [x_tv]
+        y_aug = [y_tv]
+
+        for k in [1, 2, 3]:
+            x_rot, y_rot = rotate_images(x_tv, y_tv, k)
+            x_aug.append(x_rot)
+            y_aug.append(y_rot)
+
+        x_all = torch.cat(x_aug, dim=0)
+        y_all = torch.cat(y_aug, dim=0)
+
+        print(f"Augmented train+val dataset size: {x_all.shape[0]} samples")
+        trainval_dataset = TensorDataset(x_all, y_all)
+
+    # Split train+val into train and val
+    val_size = int(0.05 * len(trainval_dataset))
+    train_size = len(trainval_dataset) - val_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size], generator=generator)
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
     model = DenoisingUNetLike().to(device)
+    
 
     if EULER:
         train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=1e-3)
-        torch.save(model.cpu().state_dict(), "residual_weights_19k_v0.pth")
-        plot_loss(train_losses, val_losses, filename="train_val_loss.png")
-        # Prepare test loader
-        test_loader = DataLoader(test_dataset, batch_size=64)
+        torch.save(model.cpu().state_dict(), f"weights_{output_name}.pth")
+        plot_loss(train_losses, val_losses, filename=f"train_val_loss_{output_name}.png")
 
-        # Compute RMSE
         model.to(device)
         rmse = compute_test_rmse(model, test_loader)
         print(f"Test RMSE: {rmse:.4f}")
 
-    else:
-        model.load_state_dict(torch.load("residual_weights_19k_v0.pth", map_location=device))
-        model.eval()  # set to evaluation mode
-        test_loader = DataLoader(test_dataset, batch_size=64)
-        print(f"Test RMSE: {compute_test_rmse(model, test_loader):.4f}")
+    elif RETRAIN_FINAL_MODEL:
+        print("\nRetraining final model on full train+val with best hyperparameters...")
 
+        # Best params from previous tuning
+        best_lr = 0.001
+        best_bs = 16
+        best_patience = 5
+        best_epochs = 25
+
+        trainval_loader = DataLoader(trainval_dataset, batch_size=best_bs, shuffle=True)
+
+        final_model = DenoisingUNetLike().to(device)
+        train_model(final_model, trainval_loader, val_loader=trainval_loader,
+                    epochs=best_epochs, lr=best_lr, patience=best_patience)
+
+        torch.save(final_model.cpu().state_dict(), f"weights_{output_name}_final_model.pth")
+        final_model.to(device)
+
+        final_rmse = compute_test_rmse(final_model, test_loader)
+        print(f"\nFinal Test RMSE (on held-out test set): {final_rmse:.4f}")
+
+        show_multiple_test_samples(final_model, test_dataset, num_samples=5, filename=f"test_examples_{output_name}_final_model.png")
+
+    else:
+        model.load_state_dict(torch.load(f"weights_{output_name}.pth", map_location=device))
+        model.eval()
+        print(f"Test RMSE: {compute_test_rmse(model, test_loader):.4f}")
 
     show_multiple_test_samples(model, test_dataset, num_samples=5)
