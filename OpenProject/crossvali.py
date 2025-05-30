@@ -310,7 +310,7 @@ if __name__ == "__main__":
             if fold == k_folds - 1:
                 torch.save(model.cpu().state_dict(), f"weights_{output_name}.pth")
 
-            plot_loss(train_losses, val_losses, filename=f"loss_fold_{fold + 1}.png")
+            plot_loss(train_losses, val_losses, filename=f"loss_fold_{fold + 1}_{output_name}.png")
 
             model.to(device)
             rmse = compute_test_rmse(model, test_loader)

@@ -6,7 +6,12 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import random
 
-EULER = True
+# Flags
+EULER = True  # Set to False to load pre-trained weights
+
+# Options
+output_name = "unet_like_19k_harder"
+batch_size = 64  # default batch size
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -112,7 +117,9 @@ def train_model(model, train_loader, val_loader, epochs, lr):
 
     return train_losses, val_losses
 
-def plot_loss(train_losses, val_losses, filename="loss_curve.png"):
+def plot_loss(train_losses, val_losses, filename=None):
+    if filename is None:
+        filename = f"loss_curve_{output_name}.png"
     plt.figure(figsize=(8, 5))
     plt.plot(train_losses, label='Train Loss')
     plt.plot(val_losses, label='Val Loss')
@@ -139,7 +146,9 @@ def compute_test_rmse(model, test_loader):
     return rmse
 
 
-def show_multiple_test_samples(model, test_dataset, num_samples=5, filename="test_examples.png"):
+def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None):
+    if filename is None:
+        filename = f"test_examples_{output_name}.png"
     model.eval()
     indices = random.sample(range(len(test_dataset)), num_samples)
 
@@ -189,40 +198,42 @@ if __name__ == "__main__":
     y_tensor = torch.tensor(clean_norm[:, np.newaxis, :, :])
     dataset = TensorDataset(x_tensor, y_tensor)
 
+    # Split into train/val/test
     total_size = len(dataset)
     test_size = int(0.10 * total_size)
     trainval_size = total_size - test_size
 
-    # Ensure reproducibility
     generator = torch.Generator().manual_seed(42)
     trainval_dataset, test_dataset = random_split(dataset, [trainval_size, test_size], generator=generator)
 
-    # Further split trainval into train and val
     val_size = int(0.05 * trainval_size)
     train_size = trainval_size - val_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size], generator=generator)
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     model = DenoisingUNetLike().to(device)
 
     if EULER:
+        print("\nTraining model on train/val split...")
         train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=1e-3)
-        torch.save(model.cpu().state_dict(), "cnn_denoiser_weights_19k_v2.pth")
-        plot_loss(train_losses, val_losses, filename="train_val_loss.png")
-        # Prepare test loader
-        test_loader = DataLoader(test_dataset, batch_size=64)
+        plot_loss(train_losses, val_losses, filename=f"train_val_loss_{output_name}.png")
 
-        # Compute RMSE
+        torch.save(model.cpu().state_dict(), f"weights_{output_name}.pth")
         model.to(device)
+
         rmse = compute_test_rmse(model, test_loader)
-        print(f"Test RMSE: {rmse:.4f}")
+        print(f"\nTest RMSE: {rmse:.4f}")
+
+        show_multiple_test_samples(model, test_dataset, num_samples=5, filename=f"test_examples_{output_name}.png")
 
     else:
-        model.load_state_dict(torch.load("cnn_denoiser_weights_19k_v2.pth", map_location=device))
-        model.eval()  # set to evaluation mode
-        test_loader = DataLoader(test_dataset, batch_size=64)
-        print(f"Test RMSE: {compute_test_rmse(model, test_loader):.4f}")
+        print(f"\nLoading pre-trained weights: weights_{output_name}.pth")
+        model.load_state_dict(torch.load(f"weights_{output_name}.pth", map_location=device))
+        model.eval()
 
+        rmse = compute_test_rmse(model, test_loader)
+        print(f"\nTest RMSE: {rmse:.4f}")
 
-    show_multiple_test_samples(model, test_dataset, num_samples=5)
+        show_multiple_test_samples(model, test_dataset, num_samples=5, filename=f"test_examples_{output_name}.png")

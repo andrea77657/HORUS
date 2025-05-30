@@ -3,6 +3,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import matplotlib.pyplot as plt
+import random
+
+# Flags
+EULER = True  # Set to False to load pre-trained weights
+
+# Options
+output_name = "autoencoder_19k"
+batch_size = 64  # default batch size
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -82,83 +90,125 @@ def plot_loss(train_losses, val_losses):
     plt.grid(True)
     plt.show()
 
-def visualize_filters(model):
-    first_layer = model.encoder[0]
-    filters = first_layer.weight.data.clone()
-    filters = filters - filters.min()
-    filters = filters / filters.max()
-    
-    fig, axs = plt.subplots(4, 8, figsize=(12, 6))
-    axs = axs.flatten()
-    for i in range(32):
-        axs[i].imshow(filters[i, 0], cmap='gray')
-        axs[i].axis('off')
-    plt.suptitle("Learned Filters from First Conv Layer")
-    plt.show()
+def plot_loss(train_losses, val_losses, filename=None):
+    if filename is None:
+        filename = f"loss_curve_{output_name}.png"
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
+    plt.title("Training vs Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
 
-def show_image_comparison(noisy, clean, output, title_prefix=""):
-    noisy = denormalize_image(noisy)
-    clean = denormalize_image(clean)
-    output = denormalize_image(output)
-    
-    fig, axs = plt.subplots(1, 3, figsize=(10, 4))
-    axs[0].imshow(noisy, cmap='gray')
-    axs[0].set_title(f"{title_prefix} Noisy")
-    axs[1].imshow(clean, cmap='gray')
-    axs[1].set_title(f"{title_prefix} Clean")
-    axs[2].imshow(output, cmap='gray')
-    axs[2].set_title(f"{title_prefix} Output")
-    for ax in axs:
-        ax.axis('off')
-    plt.show()
+def compute_test_rmse(model, test_loader):
+    model.eval()
+    criterion = nn.MSELoss()
+    total_mse = 0.0
+    with torch.no_grad():
+        for x, y in test_loader:
+            x, y = x.to(device), y.to(device)
+            output = model(x)
+            total_mse += criterion(output, y).item()
+    avg_mse = total_mse / len(test_loader)
+    rmse = np.sqrt(avg_mse)
+    return rmse
+
+def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None):
+    if filename is None:
+        filename = f"test_examples_{output_name}.png"
+    model.eval()
+    indices = random.sample(range(len(test_dataset)), num_samples)
+
+    fig, axs = plt.subplots(num_samples, 3, figsize=(12, 3 * num_samples))
+    if num_samples == 1:
+        axs = np.expand_dims(axs, axis=0)  # handle edge case
+
+    for row, idx in enumerate(indices):
+        noisy = test_dataset[idx][0][0].numpy()
+        clean = test_dataset[idx][1][0].numpy()
+        with torch.no_grad():
+            input_tensor = test_dataset[idx][0].unsqueeze(0).to(device)
+            output_tensor = model(input_tensor)
+            output = output_tensor.squeeze().cpu().numpy()
+
+        # Denormalize for display
+        noisy = denormalize_image(noisy)
+        clean = denormalize_image(clean)
+        output = denormalize_image(output)
+
+        axs[row, 0].imshow(noisy, cmap='gray')
+        axs[row, 0].set_title(f"Sample {idx} - Noisy")
+
+        axs[row, 1].imshow(clean, cmap='gray')
+        axs[row, 1].set_title("Clean")
+
+        axs[row, 2].imshow(output, cmap='gray')
+        axs[row, 2].set_title("Predicted")
+
+        for ax in axs[row]:
+            ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
 
 # MAIN
 if __name__ == "__main__":
-    # Load 19k images instead of 1k
+    # Load data
     noisy = np.load("noisy_train_19k.npy").astype(np.float32)
     clean = np.load("clean_train_19k.npy").astype(np.float32)
 
-    # normalizing
+    # Normalize
     noisy_norm = normalize_images(noisy)
     clean_norm = normalize_images(clean)
 
-    x_tensor = torch.tensor(noisy_norm[:, np.newaxis, :, :])  # (N, 1, 64, 64)
+    x_tensor = torch.tensor(noisy_norm[:, np.newaxis, :, :])
     y_tensor = torch.tensor(clean_norm[:, np.newaxis, :, :])
     dataset = TensorDataset(x_tensor, y_tensor)
 
-    val_size = int(0.05 * len(dataset))
-    train_size = len(dataset) - val_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    # Split into train/val/test
+    total_size = len(dataset)
+    test_size = int(0.10 * total_size)
+    trainval_size = total_size - test_size
 
-    # Instantiate model and load weights from cluster
+    generator = torch.Generator().manual_seed(42)
+    trainval_dataset, test_dataset = random_split(dataset, [trainval_size, test_size], generator=generator)
+
+    val_size = int(0.05 * trainval_size)
+    train_size = trainval_size - val_size
+    train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size], generator=generator)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    # Instantiate model
     model = CNN_Denoiser().to(device)
-    model.load_state_dict(torch.load("cnn_denoiser_weights_19k.pth", map_location=device))
-    model.eval()  # set to evaluation mode
 
-    # Plot loss is not applicable here since no training
-    # You can directly do inference and visualization
+    if EULER:
+        print("\nTraining model on train/val split...")
+        train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=1e-3)
+        plot_loss(train_losses, val_losses, filename=f"train_val_loss_{output_name}.png")
 
-    # Example of inference and visualization on a train sample:
-    idx_train = 0
-    noisy_img = train_dataset[idx_train][0][0].numpy()
-    clean_img = train_dataset[idx_train][1][0].numpy()
-    with torch.no_grad():
-        input_tensor = train_dataset[idx_train][0].unsqueeze(0).to(device)
-        output_tensor = model(input_tensor)
-        output_img = output_tensor.squeeze().cpu().numpy()
-    show_image_comparison(noisy_img, clean_img, output_img, "Train")
+        torch.save(model.cpu().state_dict(), f"weights_{output_name}.pth")
+        model.to(device)
 
-    # Example on a val sample:
-    # Show multiple validation image comparisons
-    num_samples = 5  # Change this to however many you'd like to see
-    for idx_val in range(num_samples):
-        noisy_img = val_dataset[idx_val][0][0].numpy()
-        clean_img = val_dataset[idx_val][1][0].numpy()
-        with torch.no_grad():
-            input_tensor = val_dataset[idx_val][0].unsqueeze(0).to(device)
-            output_tensor = model(input_tensor)
-            output_img = output_tensor.squeeze().cpu().numpy()
-        show_image_comparison(noisy_img, clean_img, output_img, f"Val {idx_val}")
+        rmse = compute_test_rmse(model, test_loader)
+        print(f"\nTest RMSE: {rmse:.4f}")
 
+        show_multiple_test_samples(model, test_dataset, num_samples=5, filename=f"test_examples_{output_name}.png")
+
+    else:
+        print(f"\nLoading pre-trained weights: weights_{output_name}.pth")
+        model.load_state_dict(torch.load(f"weights_{output_name}.pth", map_location=device))
+        model.eval()
+
+        rmse = compute_test_rmse(model, test_loader)
+        print(f"\nTest RMSE: {rmse:.4f}")
+
+        show_multiple_test_samples(model, test_dataset, num_samples=5, filename=f"test_examples_{output_name}.png")
