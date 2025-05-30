@@ -4,15 +4,17 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from math import ceil
 import random
 
 # FLAGS
-EULER = True
+EULER = False
 RETRAIN_FINAL_MODEL = False  
-AUGMENT_DATA = True
+AUGMENT_DATA = False
 
 # Options
-output_name = "resnet"
+output_name = "resnet_harder_aug_final_model"
 batch_size = 16  # default batch size
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
@@ -249,6 +251,85 @@ def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None
     plt.savefig(filename)
     plt.close()
 
+def show_comparisons_from_all_splits(model, train_dataset, val_dataset, test_dataset, filename=None):
+    if filename is None:
+        filename = f"split_comparisons_{output_name}.png"
+    model.eval()
+
+    def get_samples(dataset, n=2):
+        indices = random.sample(range(len(dataset)), n)
+        samples = []
+        for idx in indices:
+            noisy = dataset[idx][0][0].numpy()
+            clean = dataset[idx][1][0].numpy()
+            with torch.no_grad():
+                input_tensor = dataset[idx][0].unsqueeze(0).to(device)
+                output_tensor = model(input_tensor)
+                predicted = output_tensor.squeeze().cpu().numpy()
+            samples.append((noisy, clean, predicted))
+        return samples
+
+    n = 2  # number per split
+    splits = [
+        ("Train", get_samples(train_dataset, n)),
+        ("Val", get_samples(val_dataset, n)),
+        ("Test", get_samples(test_dataset, n)),
+    ]
+
+    fig, axs = plt.subplots(len(splits) * n, 3, figsize=(12, 3 * len(splits) * n))
+    if axs.ndim == 1:
+        axs = np.expand_dims(axs, axis=0)
+
+    for i, (split_name, samples) in enumerate(splits):
+        for j, (noisy, clean, predicted) in enumerate(samples):
+            row = i * n + j
+            axs[row, 0].imshow(denormalize_image(noisy), cmap='gray')
+            axs[row, 0].set_title(f"{split_name} Noisy")
+            axs[row, 1].imshow(denormalize_image(clean), cmap='gray')
+            axs[row, 1].set_title("Clean")
+            axs[row, 2].imshow(denormalize_image(predicted), cmap='gray')
+            axs[row, 2].set_title("Predicted")
+
+            for ax in axs[row]:
+                ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+
+def create_background_grid(model, dataset, num_pairs=48, output_filename="background_grid.png"):
+    """
+    Creates an A4-sized (300 DPI) seamless grid of [noisy | predicted] image pairs with no gaps.
+    """
+    dpi = 300
+    width_in, height_in = 8.27, 11.69  # A4 in inches
+    cols = 4
+    rows = ceil(num_pairs / cols)
+
+    fig = plt.figure(figsize=(width_in, height_in), dpi=dpi)
+    gs = gridspec.GridSpec(rows, cols, wspace=0, hspace=0, left=0, right=1, top=1, bottom=0)
+
+    selected_indices = random.sample(range(len(dataset)), num_pairs)
+
+    model.eval()
+    with torch.no_grad():
+        for i, idx in enumerate(selected_indices):
+            ax = fig.add_subplot(gs[i])
+            input_tensor = dataset[idx][0].unsqueeze(0).to(device)
+            prediction = model(input_tensor).squeeze().cpu().numpy()
+            noisy = dataset[idx][0][0].numpy()
+
+            noisy_img = denormalize_image(noisy)
+            pred_img = denormalize_image(prediction)
+
+            # Combine side-by-side
+            combined = np.concatenate([noisy_img, pred_img], axis=1)
+            ax.imshow(combined, cmap="gray", aspect="auto")
+            ax.axis("off")
+
+    fig.savefig(output_filename, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+
 # MAIN
 if __name__ == "__main__":
     noisy = np.load("noisy_train_19k_harder.npy").astype(np.float32)
@@ -305,15 +386,16 @@ if __name__ == "__main__":
         model.to(device)
         rmse = compute_test_rmse(model, test_loader)
         print(f"Test RMSE: {rmse:.4f}")
+        show_multiple_test_samples(model, test_dataset, num_samples=5)
 
     elif RETRAIN_FINAL_MODEL:
         print("\nRetraining final model on full train+val with best hyperparameters...")
 
         # Best params from previous tuning
-        best_lr = 0.001
+        best_lr = 0.0001
         best_bs = 16
         best_patience = 5
-        best_epochs = 25
+        best_epochs = 30
 
         trainval_loader = DataLoader(trainval_dataset, batch_size=best_bs, shuffle=True)
 
@@ -333,5 +415,6 @@ if __name__ == "__main__":
         model.load_state_dict(torch.load(f"weights_{output_name}.pth", map_location=device))
         model.eval()
         print(f"Test RMSE: {compute_test_rmse(model, test_loader):.4f}")
-
-    show_multiple_test_samples(model, test_dataset, num_samples=5)
+        show_multiple_test_samples(model, test_dataset, num_samples=5)
+        show_comparisons_from_all_splits(model, train_dataset, val_dataset, test_dataset)
+        # create_background_grid(model, test_dataset, num_pairs=48, output_filename=f"background_{output_name}.png")
