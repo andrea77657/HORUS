@@ -125,11 +125,15 @@ def extract_tensors(subset):
                 y_list.append(y.unsqueeze(0))
             return torch.cat(x_list, dim=0), torch.cat(y_list, dim=0)
 
-def train_model(model, train_loader, val_loader, epochs, lr):
+def train_model(model, train_loader, val_loader, epochs, lr, patience=5):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
     train_losses, val_losses = [], []
+
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
+    best_model_state = None
 
     for epoch in range(epochs):
         model.train()
@@ -154,8 +158,26 @@ def train_model(model, train_loader, val_loader, epochs, lr):
                 val_loss += loss.item()
         val_losses.append(val_loss / len(val_loader))
 
+        # Print progress
         if (epoch + 1) % 5 == 0:
             print(f"[Epoch {epoch+1}] Train Loss: {train_losses[-1]:.4f}, Val Loss: {val_losses[-1]:.4f}")
+
+        # Early stopping check
+        if val_losses[-1] < best_val_loss:
+            best_val_loss = val_losses[-1]
+            best_model_state = model.state_dict()
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            print(f"[!] No improvement for {epochs_no_improve} epoch(s).")
+
+        if epochs_no_improve >= patience:
+            print(f"Early stopping at epoch {epoch+1}.")
+            break
+
+    # Restore best model weights
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
 
     return train_losses, val_losses
 
@@ -190,7 +212,7 @@ def compute_test_rmse(model, test_loader):
 
 def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None):
     if filename is None:
-        filename = f"test_examples{output_name}.png"
+        filename = f"test_examples_{output_name}.png"
     model.eval()
     indices = random.sample(range(len(test_dataset)), num_samples)
 

@@ -257,6 +257,8 @@ if __name__ == "__main__":
     for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(trainval_indices)):
         if fold != -1 and fold_idx != fold:
             continue  # Skip all folds except the selected one
+        elif fold == -1:
+            pass  # Run all folds
 
         print(f"\n--- Fold {fold_idx + 1}/{k_folds} ---")
 
@@ -270,17 +272,17 @@ if __name__ == "__main__":
         train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50, lr=lr, patience=patience)
 
         # Save outputs
-        os.makedirs("results", exist_ok=True)
-        model_path = f"results/model_lr{lr}_bs{batch_size}_pat{patience}_fold{fold_idx}.pth"
+        os.makedirs("results_harder", exist_ok=True)
+        model_path = f"results_harder/model_lr{lr}_bs{batch_size}_pat{patience}_fold{fold_idx}.pth"
         torch.save(model.cpu().state_dict(), model_path)
 
-        plot_loss(train_losses, val_losses, filename=f"results/loss_lr{lr}_bs{batch_size}_pat{patience}_fold{fold_idx}.png")
+        plot_loss(train_losses, val_losses, filename=f"results_harder/loss_lr{lr}_bs{batch_size}_pat{patience}_fold{fold_idx}.png")
         model.to(device)
         rmse = compute_test_rmse(model, test_loader)
         fold_rmses.append(rmse)
 
-    avg_rmse = np.mean(fold_rmses)
-    with open(f"results/rmse_lr{lr}_bs{batch_size}_pat{patience}.txt", "w") as f:
+    avg_rmse = np.mean(fold_rmses) if fold_rmses else float('nan')
+    with open(f"results_harder/rmse_lr{lr}_bs{batch_size}_pat{patience}.txt", "w") as f:
         f.write(f"RMSEs: {fold_rmses}\nAverage RMSE: {avg_rmse:.4f}\n")
 
     print(f"\nDone. Avg RMSE: {avg_rmse:.4f}")

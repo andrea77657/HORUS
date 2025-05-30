@@ -13,7 +13,7 @@ RETRAIN_FINAL_MODEL = False
 AUGMENT_DATA = True
 
 # Options
-output_name = "resnet_crossvali_aug"
+output_name = "resnet_crossvali_aug_harder"
 batch_size = 16  # default batch size
 
 device = torch. device("cuda" if torch.cuda.is_available() else "cpu")
@@ -210,7 +210,7 @@ def compute_test_rmse(model, test_loader):
 
 def show_multiple_test_samples(model, test_dataset, num_samples=5, filename=None):
     if filename is None:
-        filename = f"test_examples{output_name}.png"
+        filename = f"test_examples_{output_name}.png"
     model.eval()
     indices = random.sample(range(len(test_dataset)), num_samples)
 
